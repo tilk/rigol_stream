@@ -1,0 +1,94 @@
+#!/usr/bin/python3
+#    rigol_stream: streaming screen image from Rigol oscilloscopes
+#    Copyright (C) 2018  Marek Materzok
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+import argparse
+import socket
+import sys
+
+from PyQt5.QtWidgets import QWidget, QApplication
+from PyQt5.QtGui import QPainter, QColor, QFont, QImage
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+
+class Display(QWidget):
+    img = None
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Rigol Stream")
+        self.show()
+
+    def setImage(self, img):
+        self.img = img
+        self.repaint()
+
+    def paintEvent(self, event):
+        qp = QPainter()
+        qp.begin(self)
+        if self.img: qp.drawImage(self.rect(), self.img)
+        qp.end()
+
+class CommThread(QThread):
+    new_screenshot = pyqtSignal(QImage)
+
+    def __init__(self, conn):
+        QThread.__init__(self)
+        self.conn = conn
+
+    def __del__(self):
+        self.wait()
+
+    def run(self):
+        while True:
+            conn.write(b":display:data?\n")
+            hd = recv_n(conn, 2)
+            if hd[0] != ord('#'): raise Exception("comm error: " + str(hd))
+            dlen = int(recv_n(conn, hd[1] - ord('0')))
+            dat = recv_n(conn, dlen)
+            while recv_n(conn, 1) != b'\n': pass
+            img = QImage()
+            img.loadFromData(dat)
+            self.new_screenshot.emit(img)
+            print("cool!")
+        conn.close()
+
+def recv_n(s, n):
+    ret = b""
+    while len(ret) < n:
+        ret += s.read(n-len(ret))
+    return ret
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+
+    parser = argparse.ArgumentParser(description = "Stream screen image from Rigol oscilloscopes")
+    parser.add_argument('-a', metavar = 'ADDR')
+    args = parser.parse_args()
+
+    if args.a:
+        conn = socket.create_connection((args.a, 5555))
+        conn = socket.SocketIO(conn, "rw")
+    else:
+        conn = open("/dev/usbtmc1", "r+b")
+
+    comm = CommThread(conn)
+    comm.start()
+    disp = Display()
+    comm.new_screenshot.connect(disp.setImage)
+    
+    app.exec()
+
+
