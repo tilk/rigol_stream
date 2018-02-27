@@ -44,31 +44,42 @@ class Display(QWidget):
 class CommThread(QThread):
     new_screenshot = pyqtSignal(QImage)
 
-    def __init__(self, conn):
+    def __init__(self, mkconn):
         QThread.__init__(self)
-        self.conn = conn
+        self.mkconn = mkconn
 
     def __del__(self):
         self.wait()
 
-    def run(self):
+    def loop(self, conn):
         while True:
+            conn.write(b"*opc?\n")
+            resp = ""
+            while resp != b"1\n":
+                resp = conn.readline()
             conn.write(b":display:data?\n")
             hd = recv_n(conn, 2)
             if hd[0] != ord('#'): raise Exception("comm error: " + str(hd))
             dlen = int(recv_n(conn, hd[1] - ord('0')))
             dat = recv_n(conn, dlen)
-            while recv_n(conn, 1) != b'\n': pass
+            #print(conn.readline())
+            #while recv_n(conn, 1) != b'\n': pass
             img = QImage()
             img.loadFromData(dat)
             self.new_screenshot.emit(img)
             print("cool!")
-        conn.close()
+
+    def run(self):
+        while True:
+            conn = self.mkconn()
+            try: self.loop(conn)
+            except: pass
+            finally: conn.close()
 
 def recv_n(s, n):
     ret = b""
     while len(ret) < n:
-        ret += s.read(n-len(ret))
+        ret += s.read(min(n-len(ret), 10000))
     return ret
 
 if __name__ == "__main__":
@@ -78,13 +89,15 @@ if __name__ == "__main__":
     parser.add_argument('-a', metavar = 'ADDR')
     args = parser.parse_args()
 
-    if args.a:
-        conn = socket.create_connection((args.a, 5555))
-        conn = socket.SocketIO(conn, "rw")
-    else:
-        conn = open("/dev/usbtmc1", "r+b")
+    def mkconn():
+        if args.a:
+            conn = socket.create_connection((args.a, 5555))
+            conn = socket.SocketIO(conn, "rw")
+        else:
+            conn = open("/dev/usbtmc1", "r+b", buffering = 0)
+        return conn
 
-    comm = CommThread(conn)
+    comm = CommThread(mkconn)
     comm.start()
     disp = Display()
     comm.new_screenshot.connect(disp.setImage)
